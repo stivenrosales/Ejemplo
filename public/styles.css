@@ -887,8 +887,11 @@ body {
 .chat-toggle:focus-visible,
 .chat-close:focus-visible,
 .send-btn:focus-visible,
-.quick-reply-btn:focus-visible,
-.chat-input:focus-visible {
+.quick-reply-btn:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+}
+
+.chat-input:focus-visible {
+    outline: none;
 }
