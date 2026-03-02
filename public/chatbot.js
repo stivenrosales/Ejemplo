@@ -95,15 +95,15 @@
             return '<a href="' + match + '" class="message-link" target="_blank" rel="noopener">' + match + '</a>';
         });
 
-        // Unordered lists
-        html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
+        // Unordered lists (including indented sub-items)
+        html = html.replace(/^[ \t]*[\-\*]\s+(.+)$/gm, '<li>$1</li>');
         html = html.replace(/((?:<li>[\s\S]*?<\/li>\s*)+)/g, function (match) {
             if (match.includes('<ul>')) return match;
             return '<ul>' + match + '</ul>';
         });
 
-        // Ordered lists
-        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+        // Ordered lists (including indented)
+        html = html.replace(/^[ \t]*\d+\.\s+(.+)$/gm, '<li>$1</li>');
 
         // Merge adjacent <ul> tags
         html = html.replace(/<\/ul>\s*<ul>/g, '');
