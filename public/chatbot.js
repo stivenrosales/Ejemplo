@@ -108,8 +108,8 @@
         // Merge adjacent <ul> tags
         html = html.replace(/<\/ul>\s*<ul>/g, '');
 
-        // Double newlines → paragraph break
-        html = html.replace(/\n\n/g, '<br><br>');
+        // Double newlines → single break (keep compact)
+        html = html.replace(/\n\n+/g, '<br>');
 
         // Single newlines → <br>
         html = html.replace(/\n/g, '<br>');
@@ -122,8 +122,10 @@
             html = html.replace('%%INLINE' + i + '%%', code);
         });
 
-        // Clean up
-        html = html.replace(/<br><br><br>/g, '<br><br>');
+        // Clean up: remove <br> adjacent to block elements
+        html = html.replace(/<br>(<\/?(?:ul|ol|li|h[1-3]|pre|blockquote|hr|table))/g, '$1');
+        html = html.replace(/(<\/(?:ul|ol|h[1-3]|pre|blockquote|table)>)<br>/g, '$1');
+        html = html.replace(/<br><br>/g, '<br>');
         html = html.replace(/<\/blockquote><br><blockquote>/g, '<br>');
 
         return html;
