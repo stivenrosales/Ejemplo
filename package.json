@@ -1,0 +1,9 @@
+{
+  "name": "elysiva-chatbot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI Chatbot for Elysiva real estate company",
+  "scripts": {
+    "dev": "npx vercel dev"
+  }
+}
