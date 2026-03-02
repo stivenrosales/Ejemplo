@@ -1,7 +1,7 @@
 /**
  * Elysiva AI Chatbot
  * Frontend chatbot powered by Gemini 2.5 Flash via OpenRouter.
- * Falls back to local pattern matching if the API is unavailable.
+ * Full markdown rendering. Falls back to local pattern matching if API unavailable.
  */
 
 (function () {
@@ -27,7 +27,115 @@
     let isOpen = false;
     let isFirstOpen = true;
     let isSending = false;
-    let aiMessages = []; // Conversation history for the AI API
+    let aiMessages = [];
+
+    // ==========================================
+    // MARKDOWN PARSER
+    // ==========================================
+
+    function parseMarkdown(text) {
+        if (!text) return '';
+
+        let html = text;
+
+        // Escape HTML to prevent XSS (preserve markdown chars)
+        html = html
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        // Code blocks: ```lang\n...\n```
+        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
+            return '<pre><code>' + code.trim() + '</code></pre>';
+        });
+
+        // Inline code: `code`
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+        // Headers: ### h3, ## h2, # h1
+        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+        // Horizontal rule
+        html = html.replace(/^---$/gm, '<hr>');
+
+        // Bold: **text**
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+
+        // Italic: *text*
+        html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+
+        // Blockquote: > text
+        html = html.replace(/^&gt;\s?(.+)$/gm, '<blockquote>$1</blockquote>');
+
+        // Images: ![alt](url) — show as link on mobile
+        html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
+            '<a href="$2" class="message-link" target="_blank" rel="noopener">[$1]</a>');
+
+        // Links: [text](url)
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
+            '<a href="$2" class="message-link" target="_blank" rel="noopener">$1</a>');
+
+        // Auto-link emails
+        html = html.replace(/(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b)/g,
+            '<a href="mailto:$1" class="message-link">$1</a>');
+
+        // Auto-link URLs not already wrapped
+        html = html.replace(/(?<!href="|">)(https?:\/\/[^\s<)]+)/g,
+            '<a href="$1" class="message-link" target="_blank" rel="noopener">$1</a>');
+
+        // Unordered lists: - item or * item
+        html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
+        html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+        // Ordered lists: 1. item
+        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+        // Wrap consecutive <li> not inside <ul> into <ol>
+        html = html.replace(/<\/ul>\s*<ul>/g, ''); // merge adjacent uls
+        html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, function (match) {
+            if (match.includes('<ul>') || match.includes('<ol>')) return match;
+            return '<ul>' + match + '</ul>';
+        });
+
+        // Tables: | col | col |
+        const tableRegex = /(?:^\|.+\|$\n?)+/gm;
+        html = html.replace(tableRegex, function (tableBlock) {
+            const rows = tableBlock.trim().split('\n').filter(r => r.trim());
+            if (rows.length < 2) return tableBlock;
+
+            let table = '<table>';
+            rows.forEach((row, i) => {
+                // Skip separator row (|---|---|)
+                if (/^\|[\s\-:|]+\|$/.test(row)) return;
+
+                const cells = row.split('|').filter(c => c.trim() !== '');
+                const tag = i === 0 ? 'th' : 'td';
+                table += '<tr>';
+                cells.forEach(cell => {
+                    table += `<${tag}>${cell.trim()}</${tag}>`;
+                });
+                table += '</tr>';
+            });
+            table += '</table>';
+            return table;
+        });
+
+        // Paragraphs: double newlines
+        html = html.replace(/\n\n/g, '</p><p>');
+
+        // Single newlines to <br> (except inside pre/table/list)
+        html = html.replace(/\n/g, '<br>');
+
+        // Clean up empty tags
+        html = html.replace(/<p><\/p>/g, '');
+        html = html.replace(/<br><br>/g, '<br>');
+
+        // Clean up blockquote merging
+        html = html.replace(/<\/blockquote><br><blockquote>/g, '<br>');
+
+        return html;
+    }
 
     // ==========================================
     // AI API
@@ -52,38 +160,12 @@
 
             aiMessages.push({ role: 'assistant', content: reply });
 
-            return formatAIResponse(reply);
+            return parseMarkdown(reply);
         } catch (error) {
             console.warn('AI API unavailable, using local fallback:', error.message);
-            // Remove the failed message from history
             aiMessages.pop();
             return generateLocalResponse(userMessage);
         }
-    }
-
-    function formatAIResponse(text) {
-        // Convert markdown-like formatting to HTML
-        let html = text
-            // Bold: **text** or __text__
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .replace(/__(.*?)__/g, '<strong>$1</strong>')
-            // Italic: *text* or _text_
-            .replace(/(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)/g, '<em>$1</em>')
-            // Bullet points
-            .replace(/^[-•]\s+(.+)/gm, '• $1')
-            // Email links
-            .replace(/(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b)/g,
-                '<a href="mailto:$1" class="message-link">$1</a>')
-            // URL links (not already in href)
-            .replace(/(?<!href=")(https?:\/\/[^\s<)]+)/g,
-                '<a href="$1" class="message-link" target="_blank" rel="noopener">$1</a>')
-            // www links
-            .replace(/(?<!\/)(www\.[^\s<)]+)/g,
-                '<a href="https://$1" class="message-link" target="_blank" rel="noopener">$1</a>')
-            // Line breaks
-            .replace(/\n/g, '<br>');
-
-        return html;
     }
 
     // ==========================================
@@ -102,28 +184,26 @@
             { re: /\b(rub[ii]|rubi)\b/i, fn: () => buildProjectCard(ELYSIVA_KB.proyectos.rubi) },
             { re: /\b(proyecto|inmueble|disponible|opciones)\b/i, fn: buildAllProjects },
             { re: /\b(precio|costo|cuanto|valor|cotiza)\b/i, fn: () =>
-                'Los precios varían según el proyecto. Para una cotización personalizada, escríbenos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a>' },
+                'Para una cotización personalizada, escríbenos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a>' },
             { re: /\b(ubicacion|donde|direccion|chorrillos|palian)\b/i, fn: () =>
-                'Nuestros proyectos están en <strong>Chorrillos</strong> y <strong>Palian</strong>, zonas con alto potencial de crecimiento.' },
+                'Nuestros proyectos: <strong>Chorrillos</strong> y <strong>Palian</strong>, zonas con alto potencial.' },
             { re: /\b(contacto|email|correo|telefono|llamar)\b/i, fn: () => ELYSIVA_KB.mensajes.contacto },
             { re: /\b(servicio|ofrecen|hacen)\b/i, fn: buildServices },
             { re: /\b(separar|reservar|comprar|adquirir)\b/i, fn: () =>
-                'Para separar tu departamento, contáctanos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a>. Un asesor te guiará en todo el proceso.' },
+                'Contáctanos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a> para separar tu depa.' },
             { re: /\b(financiamiento|credito|hipoteca|pago|cuotas)\b/i, fn: () =>
-                'Contáctanos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a> para conocer las opciones de financiamiento disponibles.' },
+                'Escríbenos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a> para opciones de financiamiento.' },
             { re: /\b(visitar|visita|conocer|agendar|tour)\b/i, fn: () =>
-                'Agenda una visita escribiéndonos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a> con tu nombre, proyecto de interés y horario preferido.' },
+                'Agenda tu visita en <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a>.' },
             { re: /\b(empresa|quienes son|mision|vision)\b/i, fn: () =>
-                `<strong>Elysiva</strong> - ${ELYSIVA_KB.empresa.descripcion} "${ELYSIVA_KB.empresa.slogan}"` },
+                `<strong>Elysiva</strong> — ${ELYSIVA_KB.empresa.descripcion}` },
             { re: /\b(departamento|habitacion|dormitorio|bano|metros|area)\b/i, fn: buildAllProjects },
             { re: /\b(web|pagina|sitio|website)\b/i, fn: () =>
-                'Visita nuestra web: <a href="https://www.elysiva.org" class="message-link" target="_blank" rel="noopener">www.elysiva.org</a>' }
+                '<a href="https://www.elysiva.org" class="message-link" target="_blank" rel="noopener">www.elysiva.org</a>' }
         ];
 
         for (const p of patterns) {
-            if (p.re.test(message) || p.re.test(normalized)) {
-                return p.fn();
-            }
+            if (p.re.test(message) || p.re.test(normalized)) return p.fn();
         }
 
         const fallbacks = ELYSIVA_KB.mensajes.noEntendido;
@@ -131,36 +211,31 @@
     }
 
     function buildProjectCard(project) {
-        let html = `<strong>${project.nombre}</strong> - ${project.descripcion}<br><br>`;
+        let html = `<strong>${project.nombre}</strong><br>`;
         project.unidades.forEach(u => {
             html += `<div class="project-card">
     <div class="project-card-title">${u.nombre}</div>
-    <div class="project-card-detail">
-        <strong>Habitaciones:</strong> ${u.habitaciones} | <strong>Baños:</strong> ${u.banos}<br>
-        <strong>Área:</strong> ${u.area}<br>${u.caracteristicas}
-    </div>
+    <div class="project-card-detail">${u.habitaciones} hab · ${u.banos} baños · ${u.area}</div>
 </div>`;
         });
         return html;
     }
 
     function buildAllProjects() {
-        const jade = ELYSIVA_KB.proyectos.jade;
-        const rubi = ELYSIVA_KB.proyectos.rubi;
-        return `Proyectos disponibles:
-<div class="project-card">
-    <div class="project-card-title">${jade.nombre}</div>
-    <div class="project-card-detail">${jade.descripcion} — Dptos de 3 hab, desde 152 m²</div>
+        const j = ELYSIVA_KB.proyectos.jade;
+        const r = ELYSIVA_KB.proyectos.rubi;
+        return `<div class="project-card">
+    <div class="project-card-title">${j.nombre}</div>
+    <div class="project-card-detail">3 hab · desde 152 m²</div>
 </div>
 <div class="project-card">
-    <div class="project-card-title">${rubi.nombre}</div>
-    <div class="project-card-detail">${rubi.descripcion} — Dptos de 2-3 hab, desde 48 m²</div>
-</div>
-¿Cuál te interesa?`;
+    <div class="project-card-title">${r.nombre}</div>
+    <div class="project-card-detail">2-3 hab · desde 48 m²</div>
+</div>`;
     }
 
     function buildServices() {
-        let html = 'Nuestros servicios:<br>';
+        let html = '';
         ELYSIVA_KB.servicios.forEach(s => {
             html += `<div class="project-card">
     <div class="project-card-title">${s.nombre}</div>
@@ -197,7 +272,7 @@
 
         const bubble = document.createElement('div');
         bubble.className = 'message-bubble';
-        bubble.innerHTML = text.replace(/\n/g, '<br>');
+        bubble.innerHTML = text;
 
         const time = document.createElement('div');
         time.className = 'message-time';
@@ -230,9 +305,11 @@
     }
 
     function scrollToBottom() {
-        chatMessages.scrollTo({
-            top: chatMessages.scrollHeight,
-            behavior: 'smooth'
+        requestAnimationFrame(() => {
+            chatMessages.scrollTo({
+                top: chatMessages.scrollHeight,
+                behavior: 'smooth'
+            });
         });
     }
 
@@ -250,9 +327,7 @@
 
     function hideTyping() {
         const typing = document.getElementById('typingIndicator');
-        if (typing) {
-            typing.remove();
-        }
+        if (typing) typing.remove();
     }
 
     function setInputEnabled(enabled) {
@@ -261,16 +336,16 @@
         sendBtn.style.opacity = enabled ? '1' : '0.5';
     }
 
-    function updateQuickReplies(context) {
-        const replyOptions = [
+    function updateQuickReplies() {
+        const options = [
             { text: 'Proyectos', message: 'Quiero ver los proyectos disponibles' },
-            { text: 'Precios', message: 'Quiero información sobre precios' },
+            { text: 'Precios', message: 'Cuánto cuestan los departamentos?' },
             { text: 'Contacto', message: 'Cómo puedo contactarlos?' },
             { text: 'Servicios', message: 'Qué servicios ofrecen?' }
         ];
 
         quickReplies.innerHTML = '';
-        replyOptions.forEach(opt => {
+        options.forEach(opt => {
             const btn = document.createElement('button');
             btn.className = 'quick-reply-btn';
             btn.textContent = opt.text;
@@ -288,7 +363,7 @@
 
         if (isOpen) {
             chatWindow.classList.remove('hidden');
-            chatWindow.offsetHeight; // trigger reflow
+            chatWindow.offsetHeight; // reflow
             chatWindow.classList.add('visible');
 
             chatToggle.querySelector('.chat-icon').classList.add('hidden');
@@ -298,13 +373,13 @@
             if (isFirstOpen) {
                 isFirstOpen = false;
                 setTimeout(() => {
-                    const welcome = '¡Hola! Bienvenido a <strong>Elysiva</strong>. Soy tu asistente virtual potenciado por inteligencia artificial y estoy aquí para ayudarte a encontrar el departamento de tus sueños. ¿En qué puedo ayudarte?';
+                    const welcome = '¡Hola! Soy el asistente de <strong>Elysiva</strong>. Te ayudo a encontrar tu departamento ideal. ¿Qué te gustaría saber?';
                     addMessage(welcome, 'bot');
                     aiMessages.push({
                         role: 'assistant',
-                        content: '¡Hola! Bienvenido a Elysiva. Soy tu asistente virtual potenciado por inteligencia artificial y estoy aquí para ayudarte a encontrar el departamento de tus sueños. ¿En qué puedo ayudarte?'
+                        content: '¡Hola! Soy el asistente de Elysiva. Te ayudo a encontrar tu departamento ideal. ¿Qué te gustaría saber?'
                     });
-                }, 500);
+                }, 400);
             }
 
             setTimeout(() => chatInput.focus(), 350);
@@ -333,7 +408,7 @@
             addMessage(response, 'bot');
         } catch (error) {
             hideTyping();
-            addMessage('Lo siento, hubo un error al procesar tu mensaje. Por favor, intenta de nuevo o escríbenos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a>.', 'bot');
+            addMessage('Error al procesar tu mensaje. Intenta de nuevo o escríbenos a <a href="mailto:admin@elysiva.org" class="message-link">admin@elysiva.org</a>.', 'bot');
         }
 
         isSending = false;
@@ -368,6 +443,7 @@
         });
     });
 
+    // Close on outside click (desktop only)
     document.addEventListener('click', (e) => {
         if (isOpen &&
             !chatWindow.contains(e.target) &&
@@ -378,9 +454,14 @@
     });
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && isOpen) {
-            toggleChat();
-        }
+        if (e.key === 'Escape' && isOpen) toggleChat();
     });
+
+    // Handle mobile keyboard resize
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => {
+            if (isOpen) scrollToBottom();
+        });
+    }
 
 })();

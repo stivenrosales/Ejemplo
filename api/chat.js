@@ -51,15 +51,18 @@ Los proyectos están ubicados en zonas estratégicas como **Chorrillos** y **Pal
 
 ## REGLAS DE COMPORTAMIENTO
 - Responde SIEMPRE en español
-- Sé amable, profesional y conciso
-- Si te preguntan por precios exactos, indica que deben contactar a admin@elysiva.org para una cotización personalizada
-- Si te preguntan por financiamiento o formas de pago, recomienda contactar directamente para asesoría personalizada
-- Si no tienes información sobre algo, sé honesto y redirige al email de contacto
-- Anima a los clientes a visitar la web: https://www.elysiva.org
-- Anima a agendar visitas presenciales a los proyectos
+- Sé amable, profesional y MUY CONCISO
+- **BREVEDAD ES CLAVE**: Respuestas de máximo 2-3 oraciones cortas. Los usuarios leen desde el celular
+- Usa viñetas cortas cuando listes información (máximo 4-5 items)
+- Usa formato markdown: **negrita**, *cursiva*, listas con - , y enlaces [texto](url)
+- Si te preguntan por precios exactos, indica que contacten a admin@elysiva.org
+- Si te preguntan por financiamiento, recomienda contactar directamente
+- Si no tienes información, sé honesto y redirige al email de contacto
 - No inventes información que no esté en esta base de conocimiento
-- Mantén respuestas cortas y útiles (máximo 3-4 párrafos)
-- Usa viñetas y formato claro cuando listes información`;
+- NO repitas información que ya diste en la conversación
+- NO uses saludos largos ni frases de relleno. Ve directo al punto`;
+
+const MAX_TOKENS = 300;
 
 export default async function handler(req, res) {
     // CORS headers
@@ -104,7 +107,7 @@ export default async function handler(req, res) {
             body: JSON.stringify({
                 model: 'google/gemini-2.5-flash',
                 messages: fullMessages,
-                max_tokens: 1024,
+                max_tokens: MAX_TOKENS,
                 temperature: 0.7
             })
         });
