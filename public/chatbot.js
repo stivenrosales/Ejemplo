@@ -38,21 +38,29 @@
 
         let html = text;
 
-        // Escape HTML to prevent XSS (preserve markdown chars)
-        html = html
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+        // Strip any raw HTML tags the AI might have included
+        html = html.replace(/<[^>]+>/g, '');
 
-        // Code blocks: ```lang\n...\n```
+        // Protect code blocks first — extract and replace with placeholders
+        const codeBlocks = [];
         html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
-            return '<pre><code>' + code.trim() + '</code></pre>';
+            const idx = codeBlocks.length;
+            codeBlocks.push('<pre><code>' + code.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code></pre>');
+            return '%%CODEBLOCK' + idx + '%%';
         });
 
-        // Inline code: `code`
-        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+        // Protect inline code
+        const inlineCodes = [];
+        html = html.replace(/`([^`]+)`/g, function (_, code) {
+            const idx = inlineCodes.length;
+            inlineCodes.push('<code>' + code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code>');
+            return '%%INLINE' + idx + '%%';
+        });
 
-        // Headers: ### h3, ## h2, # h1
+        // Escape remaining HTML
+        html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        // Headers
         html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
         html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
         html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
@@ -60,78 +68,62 @@
         // Horizontal rule
         html = html.replace(/^---$/gm, '<hr>');
 
-        // Bold: **text**
+        // Bold
         html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
 
-        // Italic: *text*
+        // Italic
         html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
 
-        // Blockquote: > text
+        // Blockquote
         html = html.replace(/^&gt;\s?(.+)$/gm, '<blockquote>$1</blockquote>');
 
-        // Images: ![alt](url) — show as link on mobile
+        // Images → link
         html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g,
-            '<a href="$2" class="message-link" target="_blank" rel="noopener">[$1]</a>');
+            '<a href="$2" class="message-link" target="_blank" rel="noopener">$1</a>');
 
-        // Links: [text](url)
+        // Markdown links: [text](url)
         html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
             '<a href="$2" class="message-link" target="_blank" rel="noopener">$1</a>');
 
-        // Auto-link emails
-        html = html.replace(/(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b)/g,
+        // Auto-link emails (not already in a mailto link)
+        html = html.replace(/(?<!mailto:)(?<!["'>])(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b)/g,
             '<a href="mailto:$1" class="message-link">$1</a>');
 
-        // Auto-link URLs not already wrapped
-        html = html.replace(/(?<!href="|">)(https?:\/\/[^\s<)]+)/g,
-            '<a href="$1" class="message-link" target="_blank" rel="noopener">$1</a>');
+        // Auto-link bare URLs (not already inside an href or tag)
+        html = html.replace(/(?<!href="|href='|">|'&gt;)(https?:\/\/[^\s<)\],"]+)/g, function (match) {
+            // Don't double-wrap if already inside an <a> tag
+            return '<a href="' + match + '" class="message-link" target="_blank" rel="noopener">' + match + '</a>';
+        });
 
-        // Unordered lists: - item or * item
+        // Unordered lists
         html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
-        html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-
-        // Ordered lists: 1. item
-        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-        // Wrap consecutive <li> not inside <ul> into <ol>
-        html = html.replace(/<\/ul>\s*<ul>/g, ''); // merge adjacent uls
-        html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, function (match) {
-            if (match.includes('<ul>') || match.includes('<ol>')) return match;
+        html = html.replace(/((?:<li>[\s\S]*?<\/li>\s*)+)/g, function (match) {
+            if (match.includes('<ul>')) return match;
             return '<ul>' + match + '</ul>';
         });
 
-        // Tables: | col | col |
-        const tableRegex = /(?:^\|.+\|$\n?)+/gm;
-        html = html.replace(tableRegex, function (tableBlock) {
-            const rows = tableBlock.trim().split('\n').filter(r => r.trim());
-            if (rows.length < 2) return tableBlock;
+        // Ordered lists
+        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
 
-            let table = '<table>';
-            rows.forEach((row, i) => {
-                // Skip separator row (|---|---|)
-                if (/^\|[\s\-:|]+\|$/.test(row)) return;
+        // Merge adjacent <ul> tags
+        html = html.replace(/<\/ul>\s*<ul>/g, '');
 
-                const cells = row.split('|').filter(c => c.trim() !== '');
-                const tag = i === 0 ? 'th' : 'td';
-                table += '<tr>';
-                cells.forEach(cell => {
-                    table += `<${tag}>${cell.trim()}</${tag}>`;
-                });
-                table += '</tr>';
-            });
-            table += '</table>';
-            return table;
-        });
+        // Double newlines → paragraph break
+        html = html.replace(/\n\n/g, '<br><br>');
 
-        // Paragraphs: double newlines
-        html = html.replace(/\n\n/g, '</p><p>');
-
-        // Single newlines to <br> (except inside pre/table/list)
+        // Single newlines → <br>
         html = html.replace(/\n/g, '<br>');
 
-        // Clean up empty tags
-        html = html.replace(/<p><\/p>/g, '');
-        html = html.replace(/<br><br>/g, '<br>');
+        // Restore code blocks and inline code
+        codeBlocks.forEach((block, i) => {
+            html = html.replace('%%CODEBLOCK' + i + '%%', block);
+        });
+        inlineCodes.forEach((code, i) => {
+            html = html.replace('%%INLINE' + i + '%%', code);
+        });
 
-        // Clean up blockquote merging
+        // Clean up
+        html = html.replace(/<br><br><br>/g, '<br><br>');
         html = html.replace(/<\/blockquote><br><blockquote>/g, '<br>');
 
         return html;
